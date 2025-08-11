@@ -10,6 +10,7 @@ use App\Models\MessageReceipt;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use App\Events\ReadUpdated;
 
 class ReadReceiptController extends Controller
 {
@@ -60,6 +61,9 @@ class ReadReceiptController extends Controller
                 ->where('user_id', $user->id)
                 ->update(['last_read_at' => now()]);
         });
+
+        // Broadcast read updated for the max message id acknowledged
+        event(new ReadUpdated($conversation->id, $user->id, $maxMessageId));
 
         return response()->json(['message' => __('Read receipts updated.')]);
     }

@@ -8,6 +8,8 @@ use App\Http\Controllers\User\MessageController;
 use App\Http\Controllers\User\AttachmentController;
 use App\Http\Controllers\User\ReadReceiptController;
 use App\Http\Controllers\User\TypingController;
+use App\Events\TestPusherPing;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -17,6 +19,13 @@ Route::get('/', function () {
 Route::get('/dashboard', function () {
     return view('dashboard');
 })->middleware(['auth', 'verified'])->name('dashboard');
+
+// TEMP: Public test route to verify broadcasting without auth
+Route::get('/test-broadcast', function (Request $request) {
+    $msg = $request->query('msg', 'ping');
+    event(new TestPusherPing($msg));
+    return response()->json(['ok' => true, 'message' => $msg]);
+});
 
 Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');

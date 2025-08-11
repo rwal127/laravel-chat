@@ -11,6 +11,9 @@ use App\Models\Message;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use App\Events\MessageSent;
+use App\Events\MessageEdited;
+use App\Events\MessageDeleted;
 
 class MessageController extends Controller
 {
@@ -20,7 +23,9 @@ class MessageController extends Controller
     public function index(Request $request, Conversation $conversation): JsonResponse
     {
         $user = $request->user();
-        $perPage = (int) $request->integer('per_page', 30);
+        $perPage = max(1, min(100, (int) $request->integer('per_page', 30)));
+        $beforeId = $request->integer('before_id');
+        $search = trim((string) $request->get('search', ''));
 
         $isParticipant = ConversationParticipant::query()
             ->where('conversation_id', $conversation->id)
@@ -30,13 +35,27 @@ class MessageController extends Controller
             return response()->json(['message' => __('Forbidden')], 403);
         }
 
-        $paginator = Message::query()
+        $query = Message::query()
             ->where('conversation_id', $conversation->id)
-            ->with('user:id,name,avatar')
-            ->orderBy('created_at', 'asc')
-            ->paginate($perPage);
+            ->with('user:id,name,avatar');
 
-        $data = $paginator->getCollection()->map(function (Message $m) {
+        if ($search !== '') {
+            $query->where('body', 'like', "%{$search}%");
+        }
+
+        // Keyset pagination for infinite scroll up: fetch older than before_id if provided
+        if ($beforeId) {
+            $query->where('id', '<', $beforeId);
+        }
+
+        $items = $query->orderBy('id', 'desc')
+            ->limit($perPage + 1)
+            ->get();
+
+        $hasMore = $items->count() > $perPage;
+        $items = $items->take($perPage)->values()->reverse(); // return oldest-first chunk
+
+        $data = $items->map(function (Message $m) {
             return [
                 'id' => $m->id,
                 'body' => $m->body,
@@ -54,10 +73,9 @@ class MessageController extends Controller
         return response()->json([
             'data' => $data,
             'meta' => [
-                'current_page' => $paginator->currentPage(),
-                'last_page' => $paginator->lastPage(),
-                'per_page' => $paginator->perPage(),
-                'total' => $paginator->total(),
+                'per_page' => $perPage,
+                'has_more' => $hasMore,
+                'next_before_id' => $data->isNotEmpty() ? ($data->first()['id'] ?? null) : null,
             ],
         ]);
     }
@@ -106,6 +124,18 @@ class MessageController extends Controller
             return $msg;
         });
 
+        // Broadcast message sent
+        event(new MessageSent($conversation->id, [
+            'id' => $message->id,
+            'body' => $message->body,
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'avatar_url' => $user->avatar_url ?? null,
+            ],
+            'created_at' => $message->created_at,
+        ]));
+
         return response()->json([
             'id' => $message->id,
             'created_at' => $message->created_at,
@@ -125,6 +155,13 @@ class MessageController extends Controller
             'edited_at' => now(),
         ]);
 
+        // Broadcast message edited
+        event(new MessageEdited($message->conversation_id, [
+            'id' => $message->id,
+            'body' => $message->body,
+            'edited_at' => $message->edited_at,
+        ]));
+
         return response()->json([
             'id' => $message->id,
             'edited_at' => $message->edited_at,
@@ -139,6 +176,8 @@ class MessageController extends Controller
         $this->authorize('delete', $message);
 
         $message->delete();
+        // Broadcast message deleted
+        event(new MessageDeleted($message->conversation_id, $message->id));
         return response()->json(['message' => __('Message deleted.')]);
     }
 }

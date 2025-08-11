@@ -7,6 +7,8 @@ use App\Models\Conversation;
 use App\Models\ConversationParticipant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use App\Events\TypingStarted;
+use App\Events\TypingStopped;
 
 class TypingController extends Controller
 {
@@ -21,7 +23,11 @@ class TypingController extends Controller
             return response()->json(['message' => __('Forbidden')], 403);
         }
 
-        // TODO: Broadcast typing started event via websockets (e.g., Laravel Echo)
+        // Broadcast typing started
+        event(new TypingStarted($conversation->id, [
+            'id' => $user->id,
+            'name' => $user->name,
+        ]));
         return response()->json(['message' => __('Typing started.')]);
     }
 
@@ -36,7 +42,11 @@ class TypingController extends Controller
             return response()->json(['message' => __('Forbidden')], 403);
         }
 
-        // TODO: Broadcast typing stopped event via websockets
+        // Broadcast typing stopped
+        event(new TypingStopped($conversation->id, [
+            'id' => $user->id,
+            'name' => $user->name,
+        ]));
         return response()->json(['message' => __('Typing stopped.')]);
     }
 }
