@@ -8,6 +8,8 @@ use App\Http\Controllers\User\MessageController;
 use App\Http\Controllers\User\AttachmentController;
 use App\Http\Controllers\User\ReadReceiptController;
 use App\Http\Controllers\User\TypingController;
+use App\Http\Controllers\User\UserController;
+use App\Http\Controllers\Broadcasting\UserAuthController;
 use App\Events\TestPusherPing;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -28,6 +30,8 @@ Route::get('/test-broadcast', function (Request $request) {
 });
 
 Route::middleware('auth')->group(function () {
+    // Chat UI
+    Route::get('/chat', function () { return view('chat.index'); })->name('chat.index');
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
@@ -35,6 +39,9 @@ Route::middleware('auth')->group(function () {
     // Avatar management
     Route::patch('/profile/avatar', [AvatarController::class, 'update'])->name('user.avatar.update');
     Route::delete('/profile/avatar', [AvatarController::class, 'destroy'])->name('user.avatar.destroy');
+
+    // Users
+    Route::get('/users/search', [UserController::class, 'search'])->name('users.search');
 
     // Contacts
     Route::get('/contacts', [ContactController::class, 'index'])->name('contacts.index');
@@ -62,6 +69,11 @@ Route::middleware('auth')->group(function () {
     // Typing indicator
     Route::post('/conversations/{conversation}/typing/start', [TypingController::class, 'start'])->name('typing.start');
     Route::post('/conversations/{conversation}/typing/stop', [TypingController::class, 'stop'])->name('typing.stop');
+
+    // Pusher user authentication (Watchlist)
+    Route::post('/pusher/user-auth', UserAuthController::class)->name('pusher.user-auth');
+    // Some clients may default to this path; map to the same controller
+    Route::post('/broadcasting/user-auth', UserAuthController::class)->name('pusher.user-auth.alias');
 });
 
 require __DIR__.'/auth.php';

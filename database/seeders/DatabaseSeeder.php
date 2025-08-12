@@ -13,11 +13,24 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // User::factory(10)->create();
+        $usersJsonPath = base_path('private/users.json');
+        if (!file_exists($usersJsonPath)) {
+            $this->command->error('private/users.json not found!');
+            return;
+        }
 
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
-        ]);
+        $users = json_decode(file_get_contents($usersJsonPath), true);
+
+        foreach ($users as $userData) {
+            User::updateOrCreate(
+                ['email' => $userData['email']], // Find user by email
+                [
+                    'name' => $userData['name'],
+                    'password' => $userData['password'], // The User model will hash this automatically
+                ]
+            );
+        }
+
+        User::factory(30)->create();
     }
 }

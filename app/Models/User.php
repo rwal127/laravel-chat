@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class User extends Authenticatable
 {
@@ -54,5 +55,21 @@ class User extends Authenticatable
     public function getAvatarUrlAttribute(): ?string
     {
         return $this->avatar ? Storage::disk('public')->url($this->avatar) : null;
+    }
+
+    /**
+     * The conversations that the user participates in.
+     */
+    public function conversations(): BelongsToMany
+    {
+        return $this->belongsToMany(Conversation::class, 'conversation_participants');
+    }
+
+    /**
+     * The contacts of the user.
+     */
+    public function contacts(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'contacts', 'user_id', 'contact_user_id');
     }
 }

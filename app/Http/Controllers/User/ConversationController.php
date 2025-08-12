@@ -49,16 +49,8 @@ class ConversationController extends Controller
                     ->toBase()
             ])
             ->with([
-                // Current user's participant row for last_read_at
-                'participants' => function ($q) use ($user) {
-                    $q->where('user_id', $user->id)->select('id', 'conversation_id', 'user_id', 'last_read_at');
-                },
-                // Last message
-                'messages' => function ($q) {
-                    $q->latest('created_at')->limit(1)->with('user:id,name,avatar');
-                },
-                // Other participants minimal info (for direct)
-                'participants.user:id,name,avatar'
+                'participants:id,name,avatar',
+                'lastMessage.user:id,name,avatar',
             ])
             ->orderByDesc(DB::raw('COALESCE(conversations.updated_at, conversations.created_at)'));
 
@@ -76,34 +68,27 @@ class ConversationController extends Controller
         $paginator = $query->paginate($perPage);
 
         $data = $paginator->getCollection()->map(function (Conversation $conv) use ($user) {
-            $lastMessage = $conv->messages->first();
-            // Build title for direct: other participant name; for group: conversation name
-            $title = $conv->type === 'group' ? ($conv->name ?: __('Group')) : null;
+            $otherUser = null;
             if ($conv->type === 'direct') {
-                $other = $conv->participants->firstWhere('user_id', '!=', $user->id)?->user;
-                if (!$other) {
-                    // If relation filtered to current only, fetch any user relation loaded
-                    $other = optional($conv->participants->firstWhere('user_id', $user->id))->user; // fallback
-                }
-                if ($other) {
-                    $title = $other->name;
-                }
+                $otherUser = $conv->participants->firstWhere('id', '!=', $user->id);
             }
 
             return [
                 'id' => $conv->id,
                 'type' => $conv->type,
-                'title' => $title,
-                'last_message' => $lastMessage ? [
-                    'id' => $lastMessage->id,
-                    'body' => $lastMessage->body,
-                    'user' => [
-                        'id' => $lastMessage->user->id,
-                        'name' => $lastMessage->user->name,
-                        'avatar_url' => $lastMessage->user->avatar_url ?? null,
-                    ],
-                    'created_at' => $lastMessage->created_at,
+                // keep both keys for frontend compatibility
+                'user' => $otherUser ? [
+                    'id' => $otherUser->id,
+                    'name' => $otherUser->name,
+                    'avatar_url' => $otherUser->avatar_url ?? null,
                 ] : null,
+                'other_user' => $otherUser ? [
+                    'id' => $otherUser->id,
+                    'name' => $otherUser->name,
+                    'avatar_url' => $otherUser->avatar_url ?? null,
+                ] : null,
+                'name' => $conv->name, // For group chats
+                'last_message' => $conv->lastMessage,
                 'unread_count' => (int) ($conv->unread_count ?? 0),
                 'updated_at' => $conv->updated_at,
             ];
@@ -199,19 +184,18 @@ class ConversationController extends Controller
         }
 
         $conversation->load([
-            'participants.user:id,name,avatar',
+            'participants:id,name,avatar',
         ]);
 
         return response()->json([
             'id' => $conversation->id,
             'type' => $conversation->type,
             'name' => $conversation->name,
-            'participants' => $conversation->participants->map(function ($p) {
+            'participants' => $conversation->participants->map(function ($u) {
                 return [
-                    'id' => $p->user->id,
-                    'name' => $p->user->name,
-                    'avatar_url' => $p->user->avatar_url ?? null,
-                    'role' => $p->role,
+                    'id' => $u->id,
+                    'name' => $u->name,
+                    'avatar_url' => $u->avatar_url ?? null,
                 ];
             }),
         ]);

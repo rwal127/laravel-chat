@@ -68,21 +68,43 @@ class ContactController extends Controller
         $user = $request->user();
         $contactUserId = (int) $request->validated()['contact_user_id'];
 
+        // You cannot add yourself
         if ($contactUserId === (int) $user->id) {
             return response()->json(['message' => __('You cannot add yourself as a contact.')], 422);
         }
 
-        // Ensure the user exists (redundant with validation's exists rule, but keeps intent clear)
         $contactUser = User::query()->select('id')->findOrFail($contactUserId);
 
-        $contact = Contact::firstOrCreate([
-            'user_id' => $user->id,
-            'contact_user_id' => $contactUser->id,
-        ]);
+        // Use a transaction to ensure both operations succeed or fail together
+        $conversationId = \Illuminate\Support\Facades\DB::transaction(function () use ($user, $contactUser) {
+            // Add to contacts
+            Contact::firstOrCreate([
+                'user_id' => $user->id,
+                'contact_user_id' => $contactUser->id,
+            ]);
+
+            // Check if a direct conversation already exists
+            $existingConversation = $user->conversations()
+                ->where('type', 'direct')
+                ->whereHas('participants', function ($query) use ($contactUser) {
+                    $query->where('user_id', $contactUser->id);
+                })
+                ->first();
+
+            if ($existingConversation) {
+                return $existingConversation->id;
+            }
+
+            // Create a new direct conversation
+            $conversation = \App\Models\Conversation::create(['type' => 'direct']);
+            $conversation->participants()->attach([$user->id, $contactUser->id]);
+
+            return $conversation->id;
+        });
 
         return response()->json([
-            'message' => __('Contact added.'),
-            'id' => $contact->id,
+            'message' => __('Contact added and conversation started.'),
+            'conversation_id' => $conversationId,
         ], 201);
     }
 

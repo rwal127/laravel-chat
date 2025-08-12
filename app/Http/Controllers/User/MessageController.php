@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\DB;
 use App\Events\MessageSent;
 use App\Events\MessageEdited;
 use App\Events\MessageDeleted;
+use App\Models\MessageReceipt;
 
 class MessageController extends Controller
 {
@@ -35,9 +36,24 @@ class MessageController extends Controller
             return response()->json(['message' => __('Forbidden')], 403);
         }
 
+        // Determine other participant for direct chats (null for groups)
+        $otherUserId = ConversationParticipant::query()
+            ->where('conversation_id', $conversation->id)
+            ->where('user_id', '!=', $user->id)
+            ->value('user_id');
+
         $query = Message::query()
             ->where('conversation_id', $conversation->id)
-            ->with('user:id,name,avatar');
+            ->with([
+                'user:id,name,avatar',
+                // Preload receipts for both current and other user to avoid N+1
+                'receipts' => function ($q) use ($user, $otherUserId) {
+                    $ids = array_filter([$user->id, $otherUserId]);
+                    if (!empty($ids)) {
+                        $q->whereIn('user_id', $ids);
+                    }
+                }
+            ]);
 
         if ($search !== '') {
             $query->where('body', 'like', "%{$search}%");
@@ -55,7 +71,51 @@ class MessageController extends Controller
         $hasMore = $items->count() > $perPage;
         $items = $items->take($perPage)->values()->reverse(); // return oldest-first chunk
 
-        $data = $items->map(function (Message $m) {
+        // Mark delivered for the current user for incoming messages that lack a receipt
+        $incomingIds = $items->where('user_id', '!=', $user->id)->pluck('id');
+        if ($incomingIds->isNotEmpty()) {
+            $existing = MessageReceipt::query()
+                ->whereIn('message_id', $incomingIds)
+                ->where('user_id', $user->id)
+                ->pluck('message_id')
+                ->all();
+            $now = now();
+            $rows = [];
+            foreach ($incomingIds as $mid) {
+                if (!in_array($mid, $existing, true)) {
+                    $rows[] = [
+                        'message_id' => $mid,
+                        'user_id' => $user->id,
+                        'status' => 'delivered',
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
+                }
+            }
+            if (!empty($rows)) {
+                MessageReceipt::insert($rows);
+            }
+        }
+
+        $data = $items->map(function (Message $m) use ($user, $otherUserId) {
+            // Compute delivered/read for sender's perspective in direct chats
+            $deliveredAt = null;
+            $readAt = null;
+            if ($otherUserId && (int) $m->user_id === (int) $user->id) {
+                $receiptRead = $m->receipts->firstWhere(function ($r) use ($otherUserId) {
+                    return (int) $r->user_id === (int) $otherUserId && $r->status === 'read';
+                });
+                $receiptDelivered = $m->receipts->firstWhere(function ($r) use ($otherUserId) {
+                    return (int) $r->user_id === (int) $otherUserId && in_array($r->status, ['delivered', 'read'], true);
+                });
+                if ($receiptDelivered) {
+                    $deliveredAt = $receiptDelivered->created_at;
+                }
+                if ($receiptRead) {
+                    $readAt = $receiptRead->updated_at ?: $receiptRead->created_at;
+                }
+            }
+
             return [
                 'id' => $m->id,
                 'body' => $m->body,
@@ -67,6 +127,8 @@ class MessageController extends Controller
                 'created_at' => $m->created_at,
                 'edited_at' => $m->edited_at,
                 'deleted_at' => $m->deleted_at,
+                'delivered_at' => $deliveredAt,
+                'read_at' => $readAt,
             ];
         });
 

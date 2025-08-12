@@ -5,8 +5,18 @@ use App\Models\ConversationParticipant;
 
 Broadcast::channel('conversations.{conversationId}', function ($user, int $conversationId) {
     // Authorize only participants of the conversation
-    return ConversationParticipant::query()
+    $isParticipant = ConversationParticipant::query()
         ->where('conversation_id', $conversationId)
         ->where('user_id', $user->id)
         ->exists();
+    if (!$isParticipant) {
+        return false;
+    }
+    // For presence channels, return user info hash; for private channels, non-false authorizes
+    return [
+        'id' => $user->id,
+        'name' => $user->name,
+        'avatar_url' => $user->avatar_url ?? null,
+    ];
 });
+ 
