@@ -13,7 +13,6 @@ export function dedupeMessages(ctx) {
   }
   if (unique.length !== ctx.messages.length) {
     ctx.messages = unique;
-    try { console.warn('[DEBUG] Duplicates removed from messages:', { before: ctx.messages.length, after: unique.length }); } catch (_) {}
   }
 }
 

@@ -9,6 +9,7 @@ use App\Models\Conversation;
 use App\Models\ConversationParticipant;
 use App\Models\Message;
 use App\Models\MessageAttachment;
+use App\Models\Contact;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -16,6 +17,7 @@ use App\Events\MessageSent;
 use App\Events\MessageEdited;
 use App\Events\MessageDeleted;
 use App\Models\MessageReceipt;
+use App\Events\ContactAdded;
 
 class MessageController extends Controller
 {
@@ -205,6 +207,40 @@ class MessageController extends Controller
                 ->where('user_id', $user->id)
                 ->update(['last_read_at' => now()]);
 
+            // If this is a direct conversation, ensure both participants are in each other's contacts
+            if (method_exists($conversation, 'type') ? ($conversation->type === 'direct') : (data_get($conversation, 'type') === 'direct')) {
+                // Fetch both participant user IDs
+                $participantIds = ConversationParticipant::query()
+                    ->where('conversation_id', $conversation->id)
+                    ->pluck('user_id')
+                    ->all();
+                if (count($participantIds) === 2) {
+                    [$u1, $u2] = array_values($participantIds);
+                    if ($u1 && $u2) {
+                        $c12 = Contact::firstOrCreate(['user_id' => $u1, 'contact_user_id' => $u2]);
+                        $c21 = Contact::firstOrCreate(['user_id' => $u2, 'contact_user_id' => $u1]);
+                        // If recipient didn't have sender in contacts, notify them to update UI
+                        if ($c21->wasRecentlyCreated) {
+                            try {
+                                // Minimal contact payload for UI; include conversation id
+                                $sender = $user->only(['id','name','email']);
+                                $payload = [
+                                    'id' => (int) ($sender['id'] ?? $user->id),
+                                    'name' => (string) ($sender['name'] ?? $user->name),
+                                    'email' => (string) ($sender['email'] ?? $user->email),
+                                    'avatar_url' => $user->avatar_url ?? null,
+                                    'conversation_id' => (int) $conversation->id,
+                                ];
+                                // Fire event to user $u2 (recipient)
+                                event(new ContactAdded((int) $u2, $payload));
+                            } catch (\Throwable $e) {
+                                // swallow to avoid affecting message send
+                            }
+                        }
+                    }
+                }
+            }
+
             // Save attachments if provided
             if ($request->hasFile('attachments')) {
                 foreach ($request->file('attachments') as $file) {
@@ -266,7 +302,18 @@ class MessageController extends Controller
      */
     public function update(MessageUpdateRequest $request, Message $message): JsonResponse
     {
+        // Policy-based authorization
         $this->authorize('update', $message);
+
+        // Redundant safety checks to enforce rules strictly in API context
+        $user = $request->user();
+        $isParticipant = ConversationParticipant::query()
+            ->where('conversation_id', $message->conversation_id)
+            ->where('user_id', $user->id)
+            ->exists();
+        if ($message->user_id !== $user->id || !$isParticipant || !$message->created_at->gt(now()->subMinutes(5))) {
+            return response()->json(['message' => __('Forbidden')], 403);
+        }
 
         $data = $request->validated();
         $message->update([
@@ -293,6 +340,16 @@ class MessageController extends Controller
     public function destroy(Request $request, Message $message): JsonResponse
     {
         $this->authorize('delete', $message);
+
+        // Redundant safety checks
+        $user = $request->user();
+        $isParticipant = ConversationParticipant::query()
+            ->where('conversation_id', $message->conversation_id)
+            ->where('user_id', $user->id)
+            ->exists();
+        if ($message->user_id !== $user->id || !$isParticipant || !$message->created_at->gt(now()->subMinutes(5))) {
+            return response()->json(['message' => __('Forbidden')], 403);
+        }
 
         $message->delete();
         // Broadcast message deleted

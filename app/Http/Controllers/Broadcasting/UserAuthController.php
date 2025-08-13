@@ -66,18 +66,21 @@ final class UserAuthController extends Controller
             $watchlist = [];
         }
 
-        $options = [
-            'cluster' => config('broadcasting.connections.pusher.options.cluster')
-                ?? env('PUSHER_APP_CLUSTER'),
-            'useTLS' => (env('PUSHER_SCHEME', 'https') === 'https'),
-        ];
+        // Pull credentials and options from config (env() may be null when config is cached)
+        $key = (string) (config('broadcasting.connections.pusher.key') ?? '');
+        $secret = (string) (config('broadcasting.connections.pusher.secret') ?? '');
+        $appId = (string) (config('broadcasting.connections.pusher.app_id') ?? '');
+        $options = (array) (config('broadcasting.connections.pusher.options') ?? []);
+        if ($key === '' || $secret === '' || $appId === '') {
+            Log::error('Pusher configuration missing', [
+                'key_empty' => $key === '',
+                'secret_empty' => $secret === '',
+                'app_id_empty' => $appId === '',
+            ]);
+            return response()->json(['message' => 'Pusher credentials are not configured.'], 500);
+        }
 
-        $pusher = new Pusher(
-            env('PUSHER_APP_KEY'),
-            env('PUSHER_APP_SECRET'),
-            env('PUSHER_APP_ID'),
-            $options
-        );
+        $pusher = new Pusher($key, $secret, $appId, $options);
 
         $userInfo = [
             'name' => (string) ($user->name ?? ''),

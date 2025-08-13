@@ -32,5 +32,8 @@ class DatabaseSeeder extends Seeder
         }
 
         User::factory(30)->create();
+
+        // Seed a direct conversation with 250 messages between user 1 and user 2
+        $this->call(TwoUserConversationSeeder::class);
     }
 }

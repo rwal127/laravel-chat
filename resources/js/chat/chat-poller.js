@@ -27,11 +27,16 @@ export function startConversationsPoller(ctx) {
         }
         return c;
       });
+      // Append any brand-new conversations not currently in ctx
+      const existingIds = new Set(ctx.conversations.map(c => Number(c.id)));
+      const newcomers = incoming.filter(c => !existingIds.has(Number(c.id)));
+      if (newcomers.length > 0) {
+        changed = true;
+        newcomers.forEach(c => updated.push({ ...c, unread_count: Number(c.unread_count || 0) }));
+      }
       if (changed) {
         ctx.conversations = [...updated].sort((a, b) => new Date(b.last_message?.created_at || 0) - new Date(a.last_message?.created_at || 0));
       }
-    } catch (e) {
-      try { console && console.warn('[Poller] conversations refresh failed', e?.message || e); } catch(_) {}
-    }
+    } catch (e) { /* silent */ }
   }, POLL_INTERVAL_MS);
 }

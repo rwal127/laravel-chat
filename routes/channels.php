@@ -20,3 +20,13 @@ Broadcast::channel('conversations.{conversationId}', function ($user, int $conve
     ];
 });
  
+// Personal user channel for per-user notifications (e.g., contact.added)
+Broadcast::channel('users.{userId}', function ($user, int $userId) {
+    return (int) $user->id === (int) $userId
+        ? [
+            'id' => $user->id,
+            'name' => $user->name,
+            'avatar_url' => $user->avatar_url ?? null,
+        ]
+        : false;
+});

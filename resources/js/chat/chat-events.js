@@ -15,6 +15,7 @@ export function bindEchoConnectionHandlers(ctx) {
         }
         // Ensure sidebar channels are active after reconnect
         ctx.subscribeSidebarChannels();
+        try { subscribeUserChannel(ctx); } catch (_) {}
       });
       pusherReal.connection.bind('disconnected', () => {});
       pusherReal.connection.bind('error', () => {});
@@ -31,6 +32,7 @@ export function ensureEchoReady(ctx) {
     if (ready) {
       bindEchoConnectionHandlers(ctx);
       ctx.subscribeSidebarChannels();
+      try { subscribeUserChannel(ctx); } catch(_) {}
       return;
     }
   } catch (_) {}
@@ -224,6 +226,100 @@ export function ensurePresenceBound(ctx) {
   } catch(_) {}
 }
 
+// Personal user channel subscription: handle contact.added to refresh sidebar
+export function subscribeUserChannel(ctx) {
+  try {
+    if (!window.Echo || !Number.isFinite(ctx.myId)) return;
+    const name = `users.${ctx.myId}`;
+    // If we had a previous ref, attempt to leave before re-subscribing
+    try {
+      if (ctx._userChRef && typeof ctx._userChRef.stopListening === 'function') {
+        ctx._userChRef.stopListening('.contact.added');
+        ctx._userChRef.stopListening('contact.added');
+      }
+      if (ctx._userChRef && typeof window.Echo.leave === 'function') {
+        window.Echo.leave(`private-${name}`);
+        window.Echo.leave(name);
+      }
+    } catch (_) {}
+
+    const ch = window.Echo.private(name)
+      .subscribed(() => {})
+      .listen('.contact.added', async (payload) => {
+        try {
+          // Refresh conversations so sidebar updates without reload
+          await ctx.loadConversations();
+          // Refresh presence watchlist to include the new contact for online status
+          try { window.refreshWatchlist && window.refreshWatchlist(); } catch (_) {}
+          // Optimistically mark the new contact as online (they just messaged us)
+          try {
+            const uid = payload?.id;
+            if (uid != null) {
+              window.OnlineUsers && window.OnlineUsers.add(String(uid));
+              window.dispatchEvent(new CustomEvent('online:update'));
+            }
+          } catch (_) {}
+          const cid = Number(payload?.conversation_id);
+          // Quickly join presence for the new conversation to capture current members for OnlineUsers, then leave
+          try {
+            if (Number.isFinite(cid) && window.Echo) {
+              const base = `conversations.${cid}`;
+              const full = `presence-${base}`;
+              const tmp = window.Echo.join(base).here((members = []) => {
+                try {
+                  const ids = Array.isArray(members) ? members.map(m => String(m?.id)).filter(Boolean) : [];
+                  ids.forEach(id => id !== String(ctx.myId) && window.OnlineUsers && window.OnlineUsers.add(id));
+                  window.dispatchEvent(new CustomEvent('online:update'));
+                } catch (_) {}
+                try { window.Echo.leave(full); } catch (_) {}
+              });
+              // Safety leave after 5s in case here() didn't fire
+              setTimeout(() => { try { window.Echo.leave(full); } catch (_) {} }, 5000);
+            }
+          } catch (_) {}
+          if (!ctx.selectedConversation && Number.isFinite(cid)) {
+            const conv = ctx.conversations.find(c => Number(c.id) === cid);
+            if (conv) ctx.selectConversation(conv);
+          }
+        } catch (_) {}
+      })
+      .listen('contact.added', async (payload) => {
+        try {
+          await ctx.loadConversations();
+          try { window.refreshWatchlist && window.refreshWatchlist(); } catch (_) {}
+          try {
+            const uid = payload?.id;
+            if (uid != null) {
+              window.OnlineUsers && window.OnlineUsers.add(String(uid));
+              window.dispatchEvent(new CustomEvent('online:update'));
+            }
+          } catch (_) {}
+          const cid = Number(payload?.conversation_id);
+          try {
+            if (Number.isFinite(cid) && window.Echo) {
+              const base = `conversations.${cid}`;
+              const full = `presence-${base}`;
+              const tmp = window.Echo.join(base).here((members = []) => {
+                try {
+                  const ids = Array.isArray(members) ? members.map(m => String(m?.id)).filter(Boolean) : [];
+                  ids.forEach(id => id !== String(ctx.myId) && window.OnlineUsers && window.OnlineUsers.add(id));
+                  window.dispatchEvent(new CustomEvent('online:update'));
+                } catch (_) {}
+                try { window.Echo.leave(full); } catch (_) {}
+              });
+              setTimeout(() => { try { window.Echo.leave(full); } catch (_) {} }, 5000);
+            }
+          } catch (_) {}
+          if (!ctx.selectedConversation && Number.isFinite(cid)) {
+            const conv = ctx.conversations.find(c => Number(c.id) === cid);
+            if (conv) ctx.selectConversation(conv);
+          }
+        } catch (_) {}
+      })
+      .error(() => {});
+    ctx._userChRef = ch;
+  } catch (_) {}
+}
 export function subscribeToConversationChannel(ctx) {
   if (!ctx.selectedConversation || !window.Echo) return;
   const name = `conversations.${ctx.selectedConversation.id}`;
@@ -343,9 +439,31 @@ export function subscribeToPresenceChannel(ctx) {
     const full = `presence-${base}`;
     ctx.presenceChannelName = full;
     ctx.presenceRef = window.Echo.join(base)
-      .here(() => {})
-      .joining(() => {})
-      .leaving(() => {})
+      .here((members = []) => {
+        try {
+          const ids = Array.isArray(members) ? members.map(m => String(m?.id)).filter(Boolean) : [];
+          ids.forEach(id => id !== String(ctx.myId) && window.OnlineUsers && window.OnlineUsers.add(String(id)));
+          window.dispatchEvent(new CustomEvent('online:update'));
+        } catch (_) {}
+      })
+      .joining((member) => {
+        try {
+          const id = String(member?.id ?? '');
+          if (id && id !== String(ctx.myId)) {
+            window.OnlineUsers && window.OnlineUsers.add(id);
+            window.dispatchEvent(new CustomEvent('online:update'));
+          }
+        } catch (_) {}
+      })
+      .leaving((member) => {
+        try {
+          const id = String(member?.id ?? '');
+          if (id && id !== String(ctx.myId)) {
+            window.OnlineUsers && window.OnlineUsers.delete(id);
+            window.dispatchEvent(new CustomEvent('online:update'));
+          }
+        } catch (_) {}
+      })
       .listenForWhisper('typing', (e) => {
         const fromId = Number(e?.user_id);
         const sameUser = Number.isFinite(fromId) && fromId === ctx.myId;

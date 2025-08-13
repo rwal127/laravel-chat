@@ -4,7 +4,9 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Models\MessageAttachment;
+use App\Models\Message;
 use App\Policies\MessageAttachmentPolicy;
+use App\Policies\MessagePolicy;
 use Illuminate\Foundation\Support\Providers\AuthServiceProvider as ServiceProvider;
 
 class AuthServiceProvider extends ServiceProvider
@@ -16,6 +18,7 @@ class AuthServiceProvider extends ServiceProvider
      */
     protected $policies = [
         MessageAttachment::class => MessageAttachmentPolicy::class,
+        Message::class => MessagePolicy::class,
     ];
 
     /**
@@ -23,6 +26,6 @@ class AuthServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        $this->registerPolicies();
     }
 }

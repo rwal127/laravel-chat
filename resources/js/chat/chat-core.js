@@ -33,6 +33,7 @@ import {
   ensurePresenceBound as evEnsurePresence,
   subscribeToPresenceChannel as evSubscribePresence,
   subscribeToConversationChannel as evSubscribeConv,
+  subscribeUserChannel as evSubscribeUser,
   handleTypingInput as evHandleTyping,
   sendTypingWhisper as evSendTyping,
   stopTyping as evStopTyping,
@@ -153,7 +154,6 @@ export default function chatApp() {
           await this.jumpToMatch(this.searchCursor);
         }
       } catch (e) {
-        console.error('[Search] performSearch failed:', e);
         this.searchMatches = [];
         this.searchCursor = -1;
       } finally {
@@ -258,7 +258,6 @@ export default function chatApp() {
           }
         });
       } catch (e) {
-        console.error('[DEBUG] Failed to load older from beforeId:', e);
       } finally {
         this.loadingOlder = false;
       }
@@ -295,7 +294,6 @@ export default function chatApp() {
           } catch (_) {}
         });
       } catch (e) {
-        console.error('[DEBUG] Failed to load initial page:', e);
         this.messages = [];
         this.hasMore = false;
         this.nextBeforeId = null;
@@ -324,7 +322,6 @@ export default function chatApp() {
         this.clientInstanceId = `inst-${Math.random().toString(36).slice(2)}-${Date.now()}`;
       }
       if (this.me) {
-        console.log('Chat app initialized for user:', this.me);
         try { window.__chatApp = this; } catch(_) {}
         // Try to bind Echo connection handlers (may not be ready yet)
         this.bindEchoConnectionHandlers();
@@ -333,6 +330,8 @@ export default function chatApp() {
         this.startConversationsPoller();
         this.startSidebarWatchdog();
         this.ensureEchoReady();
+        // Ensure personal user channel is bound ASAP
+        try { evSubscribeUser(this); } catch (_) {}
         // Start presence watchdog to guarantee presence bindings
         this.startPresenceWatchdog();
         // React to online/offline updates
@@ -345,9 +344,7 @@ export default function chatApp() {
             }
           });
         } catch(_) {}
-      } else {
-        console.log('Chat app not initialized; user not found.');
-      }
+      } else { /* not initialized */ }
     },
 
     startPresenceWatchdog() { evStartPresence(this); },
@@ -432,7 +429,6 @@ export default function chatApp() {
           .sort(uiCompareByLastActivity);
         this.subscribeSidebarChannels();
       } catch (error) {
-        console.error('Failed to load conversations:', error);
         this.conversations = [];
       } finally {
         this.loading = false;
@@ -457,10 +453,7 @@ export default function chatApp() {
         
         this.searchResults = users.filter(user => !existingUserIds.has(user.id));
         this.showAddUser = this.searchResults.length > 0;
-        
-        console.log('Search results:', this.searchResults);
       } catch (error) {
-        console.error('Failed to search users:', error);
         this.searchResults = [];
         this.showAddUser = false;
       }
@@ -468,11 +461,12 @@ export default function chatApp() {
 
     async addUser(user) {
       try {
-        console.log('Adding user:', user);
         await addContact(user.id);
         
         // Reload conversations to get the new one
         await this.loadConversations();
+        // Refresh presence watchlist to include this new contact so online status is accurate
+        try { window.refreshWatchlist && window.refreshWatchlist(); } catch (_) {}
         // Start polling fallback for unread/preview refresh
         this.startConversationsPoller();
         
@@ -491,7 +485,6 @@ export default function chatApp() {
         this.showAddUser = false;
         
       } catch (error) {
-        console.error('Failed to add user:', error);
         const message = error.response?.data?.message || error.message || 'Failed to add user';
         alert(`Error: ${message}`);
       }
@@ -502,14 +495,13 @@ export default function chatApp() {
         return;
       }
       
-      console.log('Selecting conversation:', conversation);
       // Zero unread count for this conversation and resort sidebar
       uiResetUnreadAndResort(this, conversation.id);
       // Leave/unsubscribe from previous conversation and presence
       evLeaveActive(this);
       this.selectedConversation = conversation;
       try { window.__chatApp = this; } catch(_) {}
-      try { window.console && window.console.log('[Typing][State] selectedConversation', { id: this.selectedConversation?.id }); } catch(_) {}
+      try { /* typing state debug removed */ } catch(_) {}
       this.messages = [];
       this.otherTyping = false;
       // presence cleared by evLeaveActive
@@ -551,8 +543,6 @@ export default function chatApp() {
         this.dedupeMessages();
         this.messages = [...this.messages];
         
-        console.log('[DEBUG] Final processed messages array:', JSON.parse(JSON.stringify(this.messages)));
-        
         // Scroll to bottom
         this.$nextTick(async () => {
           this.scrollToBottom();
@@ -562,15 +552,13 @@ export default function chatApp() {
             const last = this.messages[this.messages.length - 1];
             if (last && this.selectedConversation) {
               await apiMarkRead(this.selectedConversation.id, last.id);
-              console.log('[DEBUG] Marked messages as read up to id:', last.id);
             }
           } catch (e) {
-            console.warn('[DEBUG] Failed to mark messages as read:', e?.response?.data || e.message);
+            /* silent */
           }
         });
         
       } catch (error) {
-        console.error('[DEBUG] Failed to load messages:', error);
         this.messages = [];
         this.hasMore = false;
         this.nextBeforeId = null;
@@ -603,7 +591,7 @@ export default function chatApp() {
           }
         });
       } catch (e) {
-        console.error('[DEBUG] Failed to load older messages:', e);
+        // ignore
       } finally {
         this.loadingOlder = false;
       }
@@ -628,13 +616,11 @@ export default function chatApp() {
       const files = this.pendingAttachments.map(it => it.file).filter(Boolean);
       
       try {
-        console.log('Sending message:', { hasText, files: files.length });
         const response = await apiSendMessageWithAttachments(this.selectedConversation.id, messageBody, files);
-        console.log('Message sent:', response);
         const respId = Number(response?.id);
         const respCreated = response?.created_at || new Date().toISOString();
         if (!Number.isFinite(respId)) {
-          console.warn('[DEBUG] Response without valid id, skipping local push');
+          /* no valid id; skip local push */
         } else {
           // If Echo already delivered the message, skip local insert
           if (!this.messages.some(m => Number(m.id) === respId)) {
@@ -668,7 +654,6 @@ export default function chatApp() {
         this.clearPendingAttachments();
         
       } catch (error) {
-        console.error('Failed to send message:', error);
         const message = error.response?.data?.message || error.message || 'Failed to send message';
         alert(`Error: ${message}`);
         
