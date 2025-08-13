@@ -63,8 +63,42 @@ class AttachmentController extends Controller
             return $msg;
         });
 
+        // Build attachments payload
+        $message->load('attachments');
+        $attachments = $message->attachments->map(function (MessageAttachment $a) {
+            $inlineUrl = route('attachments.inline', $a);
+            $downloadUrl = route('attachments.download', $a);
+            $isImage = str_starts_with((string) $a->mime_type, 'image/');
+            return [
+                'id' => $a->id,
+                'url' => $inlineUrl,
+                'download_url' => $downloadUrl,
+                'mime_type' => $a->mime_type,
+                'original_name' => $a->original_name,
+                'size_bytes' => (int) $a->size_bytes,
+                'is_image' => $isImage,
+            ];
+        })->values();
+
+        // Broadcast message sent with attachments
+        event(new \App\Events\MessageSent($conversation->id, [
+            'id' => $message->id,
+            'body' => null,
+            'has_attachments' => true,
+            'attachments' => $attachments,
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'avatar_url' => $user->avatar_url ?? null,
+            ],
+            'created_at' => $message->created_at,
+        ]));
+
         return response()->json([
             'id' => $message->id,
+            'body' => null,
+            'has_attachments' => true,
+            'attachments' => $attachments,
             'created_at' => $message->created_at,
         ], 201);
     }
@@ -74,23 +108,23 @@ class AttachmentController extends Controller
      */
     public function download(Request $request, MessageAttachment $attachment)
     {
-        $user = $request->user();
-        $message = $attachment->message()->with('conversation')->first();
-        if (!$message) {
-            abort(404);
-        }
-
-        $isParticipant = ConversationParticipant::query()
-            ->where('conversation_id', $message->conversation_id)
-            ->where('user_id', $user->id)
-            ->exists();
-        if (!$isParticipant) {
-            abort(403);
-        }
-
+        $this->authorize('view', $attachment);
         return Storage::disk($attachment->disk)
             ->download($attachment->path, $attachment->original_name, [
                 'Content-Type' => $attachment->mime_type ?: 'application/octet-stream',
             ]);
+    }
+
+    /**
+     * Inline stream an attachment (e.g., images) with policy enforcement.
+     */
+    public function inline(Request $request, MessageAttachment $attachment)
+    {
+        $this->authorize('view', $attachment);
+        $headers = [
+            'Content-Type' => $attachment->mime_type ?: 'application/octet-stream',
+            'Content-Disposition' => 'inline; filename="'. addslashes($attachment->original_name) .'"',
+        ];
+        return Storage::disk($attachment->disk)->response($attachment->path, $attachment->original_name, $headers);
     }
 }

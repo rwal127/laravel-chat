@@ -8,6 +8,7 @@ use App\Http\Requests\Messages\MessageUpdateRequest;
 use App\Models\Conversation;
 use App\Models\ConversationParticipant;
 use App\Models\Message;
+use App\Models\MessageAttachment;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -46,6 +47,7 @@ class MessageController extends Controller
             ->where('conversation_id', $conversation->id)
             ->with([
                 'user:id,name,avatar',
+                'attachments',
                 // Preload receipts for both current and other user to avoid N+1
                 'receipts' => function ($q) use ($user, $otherUserId) {
                     $ids = array_filter([$user->id, $otherUserId]);
@@ -116,9 +118,26 @@ class MessageController extends Controller
                 }
             }
 
+            $attachments = $m->attachments->map(function ($a) {
+                $inlineUrl = route('attachments.inline', $a);
+                $downloadUrl = route('attachments.download', $a);
+                $isImage = str_starts_with((string) $a->mime_type, 'image/');
+                return [
+                    'id' => $a->id,
+                    'url' => $inlineUrl,
+                    'download_url' => $downloadUrl,
+                    'mime_type' => $a->mime_type,
+                    'original_name' => $a->original_name,
+                    'size_bytes' => (int) $a->size_bytes,
+                    'is_image' => $isImage,
+                ];
+            });
+
             return [
                 'id' => $m->id,
                 'body' => $m->body,
+                'has_attachments' => (bool) $m->has_attachments,
+                'attachments' => $attachments,
                 'user' => [
                     'id' => $m->user->id,
                     'name' => $m->user->name,
@@ -160,15 +179,18 @@ class MessageController extends Controller
             return response()->json(['message' => __('Forbidden')], 403);
         }
 
-        if (!($data['body'] ?? null)) {
+        // Accept either body or attachments (validated in request). If both missing, reject.
+        $hasUploaded = $request->hasFile('attachments');
+        if (!($data['body'] ?? null) && !$hasUploaded) {
             return response()->json(['message' => __('Message body is required when there are no attachments.')], 422);
         }
 
-        $message = DB::transaction(function () use ($conversation, $user, $data) {
+        $message = DB::transaction(function () use ($conversation, $user, $data, $request) {
             $msg = Message::create([
                 'conversation_id' => $conversation->id,
                 'user_id' => $user->id,
-                'body' => $data['body'],
+                'body' => $data['body'] ?? null,
+                'has_attachments' => $request->hasFile('attachments'),
             ]);
 
             // Touch conversation and set last message id
@@ -183,13 +205,48 @@ class MessageController extends Controller
                 ->where('user_id', $user->id)
                 ->update(['last_read_at' => now()]);
 
+            // Save attachments if provided
+            if ($request->hasFile('attachments')) {
+                foreach ($request->file('attachments') as $file) {
+                    if (!$file) { continue; }
+                    $path = $file->store('attachments', 'public');
+                    MessageAttachment::create([
+                        'message_id' => $msg->id,
+                        'disk' => 'public',
+                        'path' => $path,
+                        'original_name' => $file->getClientOriginalName(),
+                        'mime_type' => $file->getClientMimeType(),
+                        'size_bytes' => $file->getSize(),
+                    ]);
+                }
+            }
+
             return $msg;
         });
 
-        // Broadcast message sent
+        // Load attachments for payload
+        $message->load('attachments');
+        $attachments = $message->attachments->map(function ($a) {
+            $inlineUrl = route('attachments.inline', $a);
+            $downloadUrl = route('attachments.download', $a);
+            $isImage = str_starts_with((string) $a->mime_type, 'image/');
+            return [
+                'id' => $a->id,
+                'url' => $inlineUrl,
+                'download_url' => $downloadUrl,
+                'mime_type' => $a->mime_type,
+                'original_name' => $a->original_name,
+                'size_bytes' => (int) $a->size_bytes,
+                'is_image' => $isImage,
+            ];
+        })->values();
+
+        // Broadcast message sent with possible attachments
         event(new MessageSent($conversation->id, [
             'id' => $message->id,
             'body' => $message->body,
+            'has_attachments' => $attachments->isNotEmpty(),
+            'attachments' => $attachments,
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,

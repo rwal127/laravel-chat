@@ -32,7 +32,7 @@
             @endphp
             @if ($avatarUrl)
                 <div class="relative inline-block h-12 w-12">
-                    <img src="{{ $avatarUrl }}" alt="{{ __('Current avatar') }}" class="h-12 w-12 rounded-full object-cover" />
+                    <img src="{{ $avatarUrl }}" alt="{{ __('Current avatar') }}" class="h-12 w-12 rounded-full object-cover block" />
                     <button type="submit" form="avatar-delete-form"
                             class="absolute top-0 right-0 z-10 h-6 w-6 -translate-y-1/3 translate-x-1/3 rounded-full bg-red-600 text-white text-xs flex items-center justify-center shadow hover:bg-red-700"
                             title="{{ __('Remove avatar') }}" aria-label="{{ __('Remove avatar') }}">

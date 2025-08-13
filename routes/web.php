@@ -61,6 +61,7 @@ Route::middleware('auth')->group(function () {
 
     // Attachments
     Route::post('/conversations/{conversation}/attachments', [AttachmentController::class, 'store'])->name('attachments.store');
+    Route::get('/attachments/{attachment}/inline', [AttachmentController::class, 'inline'])->name('attachments.inline');
     Route::get('/attachments/{attachment}/download', [AttachmentController::class, 'download'])->name('attachments.download');
 
     // Read receipts
